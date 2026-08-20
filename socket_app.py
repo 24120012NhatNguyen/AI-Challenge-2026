@@ -1,10 +1,13 @@
+import io
 import json
 import os
+import zipfile
 
 import socketio
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from utils.logger_config import get_logger
 from utils.models import QuestionNameRequest, UsernameRequest, UserRequest
@@ -348,6 +351,109 @@ async def get_ignore(request: QuestionNameRequest):
     else:
         result = {"questionName": ques_name, "data": []}
     return result
+
+##################### Export CSV/ZIP (KIS format) ##############
+def _build_kis_csv_content(lst_idxs):
+    """Build CSV content in KIS format from a list of internal indices.
+
+    Each line: "<video_name>,<frame_id>" (no header, UTF-8, LF line endings).
+    Reuses index2info() to get video names and frame IDs.
+
+    Returns:
+        str: CSV content string ready to be written to file/response.
+    """
+    info = index2info(lst_idxs)
+    lines = []
+    for video_name, frame_id in zip(info["lst_video_idxs"], info["lst_keyframe_idxs"]):
+        lines.append(f"{video_name},{frame_id}")
+    return "\n".join(lines)
+
+
+@app.get("/export/kis")
+async def export_kis(questionName: str = Query(..., description="Tên câu hỏi cần export")):
+    """Export danh sách đã đánh dấu (sendView) cho 1 câu hỏi thành file CSV định dạng KIS.
+
+    Format: mỗi dòng "<video_name>,<frame_id>", không header, UTF-8, LF.
+    Giới hạn tối đa 100 dòng theo rule cuộc thi.
+    """
+    lst_idxs = AnswerDict.get(questionName, [])
+    if not lst_idxs:
+        return Response(
+            content=json.dumps({"error": f"Không có dữ liệu cho câu hỏi '{questionName}'"}),
+            status_code=400,
+            media_type="application/json",
+        )
+
+    if len(lst_idxs) > 100:
+        return Response(
+            content=json.dumps({
+                "error": (
+                    f"Câu hỏi '{questionName}' có {len(lst_idxs)} dòng, "
+                    f"vượt quá giới hạn 100 dòng/file của cuộc thi. "
+                    f"Vui lòng xoá bớt trên UI trước khi export."
+                )
+            }),
+            status_code=400,
+            media_type="application/json",
+        )
+
+    csv_content = _build_kis_csv_content(lst_idxs)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{questionName}.csv"'},
+    )
+
+
+@app.get("/export/submission_zip")
+async def export_submission_zip():
+    """Export toàn bộ câu hỏi KIS thành file submission.zip.
+
+    Chỉ lấy các key trong AnswerDict có tên kết thúc bằng "-kis"
+    (quy ước đặt tên phải khớp với tên file BTC cấp, ví dụ: "query-1-kis").
+    Cấu trúc zip: submission/<question_name>.csv
+
+    Các câu hỏi có > 100 dòng sẽ bị bỏ qua (không crash) và được liệt kê
+    trong file _WARNINGS.txt bên trong zip.
+    """
+    kis_keys = [k for k in AnswerDict.keys() if k.endswith("-kis")]
+
+    if not kis_keys:
+        return Response(
+            content=json.dumps({"error": "Không có câu hỏi nào kết thúc bằng '-kis' trong AnswerDict"}),
+            status_code=400,
+            media_type="application/json",
+        )
+
+    buf = io.BytesIO()
+    warnings = []
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for key in sorted(kis_keys):
+            lst_idxs = AnswerDict.get(key, [])
+            if len(lst_idxs) > 100:
+                msg = f"{key}: có {len(lst_idxs)} dòng (vượt quá giới hạn 100), đã bỏ qua."
+                warnings.append(msg)
+                logger.warning("Export ZIP: %s", msg)
+                continue
+            if not lst_idxs:
+                msg = f"{key}: không có dữ liệu, đã bỏ qua."
+                warnings.append(msg)
+                logger.warning("Export ZIP: %s", msg)
+                continue
+
+            csv_content = _build_kis_csv_content(lst_idxs)
+            zf.writestr(f"submission/{key}.csv", csv_content)
+
+        if warnings:
+            zf.writestr("submission/_WARNINGS.txt", "\n".join(warnings))
+
+    buf.seek(0)
+    return Response(
+        content=buf.read(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="submission.zip"'},
+    )
 
 
 # Create combined ASGI application

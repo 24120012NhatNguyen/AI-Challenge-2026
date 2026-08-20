@@ -339,6 +339,111 @@ def get_video_shot(imgid: Optional[str] = None):
     return data
 
 
+@app.get("/framerange")
+def frame_range(
+    video_id: str,
+    start: int,
+    end: int,
+    text_query: str = "",
+    model_type: str = "nomic",
+):
+    """Trả về tất cả keyframe của video_id nằm trong khoảng [start, end].
+
+    Nếu text_query được cung cấp, kết quả sẽ được xếp hạng theo mức khớp
+    với text_query (dùng CosineFaiss.text_search) thay vì theo frame_id tăng dần.
+
+    Args:
+        video_id: ID video (ví dụ: "L21_V001")
+        start: frame_id bắt đầu (bao gồm)
+        end: frame_id kết thúc (bao gồm)
+        text_query: (tuỳ chọn) query text để xếp hạng lại kết quả
+        model_type: (tuỳ chọn) "nomic" | "clipv2" | "both" (mặc định "nomic")
+
+    Returns:
+        JSON với video_id, video_info (lst_keyframe_paths, lst_idxs, lst_keyframe_idxs), message.
+    """
+    logger.info("frame range: video_id=%s, start=%d, end=%d, text_query=%s, model_type=%s",
+                video_id, start, end, text_query, model_type)
+
+    all_idxs = Videoid2imgid.get(video_id, None)
+    if all_idxs is None:
+        return {"error": f"Video '{video_id}' không tồn tại", "status_code": 404}
+
+    # Filter keyframes within [start, end] range
+    range_items = []  # list of (frame_id, idx, image_path)
+    for idx in all_idxs:
+        image_info = DictImagePath[idx]
+        image_path = image_info["image_path"]
+        _, _, frame_id_str = _parse_keyframe_path(image_path)
+        frame_id = int(frame_id_str)
+        if start <= frame_id <= end:
+            range_items.append((frame_id, idx, image_path))
+
+    if not range_items:
+        return {
+            "video_id": video_id,
+            "video_info": {
+                "lst_keyframe_paths": [],
+                "lst_idxs": [],
+                "lst_keyframe_idxs": [],
+            },
+            "message": "Không có keyframe nào trong khoảng này, thử mở rộng phạm vi",
+        }
+
+    if text_query and text_query.strip():
+        # Re-rank by text similarity
+        range_idxs = [item[1] for item in range_items]
+        index = np.array(range_idxs).astype("int64")
+        k = len(range_idxs)
+
+        if model_type == "both":
+            scores_nomic, list_nomic_ids, _, _ = CosineFaiss.text_search(
+                text_query, index=index, k=k, model_type="nomic"
+            )
+            scores_clipv2, list_clipv2_ids, _, _ = CosineFaiss.text_search(
+                text_query, index=index, k=k, model_type="clipv2"
+            )
+            lst_scores, list_ids = merge_searching_results_by_addition(
+                [scores_nomic, scores_clipv2], [list_nomic_ids, list_clipv2_ids]
+            )
+            infos_query = [
+                CosineFaiss.id2img.get(idx)
+                for idx in list_ids
+                if CosineFaiss.id2img.get(idx)
+            ]
+            list_image_paths = [info["image_path"] for info in infos_query]
+        else:
+            lst_scores, list_ids, _, list_image_paths = CosineFaiss.text_search(
+                text_query, index=index, k=k, model_type=model_type
+            )
+
+        # Build response from re-ranked results
+        result_paths = []
+        result_idxs = []
+        result_frame_ids = []
+        for i, img_path in enumerate(list_image_paths):
+            _, _, fid_str = _parse_keyframe_path(img_path)
+            result_paths.append(img_path)
+            result_idxs.append(int(list_ids[i]))
+            result_frame_ids.append(int(fid_str))
+    else:
+        # Sort by frame_id ascending (temporal order)
+        range_items.sort(key=lambda x: x[0])
+        result_paths = [item[2] for item in range_items]
+        result_idxs = [item[1] for item in range_items]
+        result_frame_ids = [item[0] for item in range_items]
+
+    return {
+        "video_id": video_id,
+        "video_info": {
+            "lst_keyframe_paths": result_paths,
+            "lst_idxs": result_idxs,
+            "lst_keyframe_idxs": result_frame_ids,
+        },
+        "message": "",
+    }
+
+
 @app.post("/feedback")
 def feed_back(request: FeedbackRequest):
     k = request.k

@@ -252,6 +252,15 @@ function Index() {
     })
       .then((data) => data.json())
       .then((data) => {
+        if (!Array.isArray(data)) {
+          const detail = data && data.detail;
+          const message = Array.isArray(detail)
+            ? detail.map((err) => err.msg || JSON.stringify(err)).join("\n")
+            : detail || JSON.stringify(data);
+          alert("Textsearch Failed: " + message);
+          setLoading(false);
+          return;
+        }
         linksArray.push({
           data: data,
           k: k,
@@ -266,6 +275,7 @@ function Index() {
       })
       .catch((e) => {
         alert("Textsearch Fetch Failed!" + e);
+        setLoading(false);
       });
   };
 
@@ -858,6 +868,33 @@ function Index() {
                 setQuestionName={setQuestionName}
               />
             </div>
+            <button
+              type="button"
+              title="Export CSV cho câu hỏi đang chọn"
+              onClick={() => {
+                if (!questionName) {
+                  alert("Chọn câu hỏi trước khi export CSV");
+                  return;
+                }
+                window.open(
+                  `${socket_url}/export/kis?questionName=${encodeURIComponent(questionName)}`,
+                  "_blank"
+                );
+              }}
+              className="text-xs px-1.5 h-6 rounded-md bg-slate-700 hover:bg-emerald-700 hover:ring-1 ring-emerald-400 transition text-slate-300"
+            >
+              CSV
+            </button>
+            <button
+              type="button"
+              title="Export toàn bộ submission ZIP"
+              onClick={() => {
+                window.open(`${socket_url}/export/submission_zip`, "_blank");
+              }}
+              className="text-xs px-1.5 h-6 rounded-md bg-slate-700 hover:bg-blue-700 hover:ring-1 ring-blue-400 transition text-slate-300"
+            >
+              ZIP
+            </button>
             {/* <input
               placeholder="Username"
               value={username}

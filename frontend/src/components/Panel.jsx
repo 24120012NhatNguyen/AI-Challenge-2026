@@ -10,6 +10,7 @@ import GetTagRec from "./GetTagRec";
 import LoadingIcon from "./LoadingIcon";
 import VideoWrapper from "./VideoWrapper.jsx";
 import PageButton from "./PageButton";
+import FrameRangeViewer from "./FrameRangeViewer.jsx";
 
 const VIDEO_PER_PAGE = 7;
 
@@ -394,6 +395,16 @@ function panel({
           </button>
         </div>
       </div>
+      {/* {frame range viewer} */}
+      <FrameRangeViewer
+        handleKNN={handleKNN}
+        toggleFullScreen={toggleFullScreen}
+        handleSelect={handleSelect}
+        handleIgnore={handleIgnore}
+        getIgnoredImages={getIgnoredImages}
+        questionName={questionName}
+        addView={addView}
+      />
       {/* {images} */}
       {/* <div className="container mx-auto relative max-w-full w-screen max-h-[570px] overflow-auto flex flex-auto flex-wrap justify-around"> */}
       <div
