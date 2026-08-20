@@ -1,0 +1,4 @@
+context_encoded/bboxes_encoded/*
+context_encoded/classes_encoded/*
+context_encoded/number_encoded/*
+context_encoded/tags_encoded/*
