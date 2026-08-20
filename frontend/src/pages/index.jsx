@@ -673,11 +673,13 @@ function Index() {
               placeholder="K"
               className="w-12 transition-all hover:drop-shadow-[0px_4px_3px_rgba(255,255,255,0.2)] placeholder:italic text-slate-300 indent-0.5 relative rounded-sm bg-slate-800"
               onChange={(e) => {
-                if (filter && e.target.value > currentK)
+                const val = e.target.value === "" ? 500 : Number(e.target.value);
+                const parsed = Number.isNaN(val) ? 500 : val;
+                if (filter && parsed > currentK)
                   alert(
                     `Filter Mode: K must be smaller than in the previous query`
                   );
-                else setK(e.target.value);
+                else setK(parsed);
               }}
               value={k}
             ></input>
@@ -743,7 +745,8 @@ function Index() {
               placeholder="range"
               className="w-6 appearance-none transition-all hover:drop-shadow-[0px_4px_3px_rgba(255,255,255,0.2)] placeholder:italic text-slate-300 text-lg relative p-0.5 rounded-md bg-slate-800"
               onChange={(e) => {
-                SetRangeFilter(e.target.value);
+                const val = e.target.value === "" ? 3 : Number(e.target.value);
+                SetRangeFilter(Number.isNaN(val) ? 3 : val);
               }}
               value={rangeFilter}
             ></input>
@@ -939,7 +942,8 @@ function Index() {
               placeholder="Space"
               className="w-6 appearance-none transition-all hover:drop-shadow-[0px_4px_3px_rgba(255,255,255,0.2)] placeholder:italic text-slate-300 text-lg relative p-0.5 rounded-md bg-slate-800"
               onChange={(e) => {
-                setSearchSpace(e.target.value);
+                const val = e.target.value === "" ? 0 : Number(e.target.value);
+                setSearchSpace(Number.isNaN(val) ? 0 : val);
               }}
               value={searchSpace}
             ></input>
