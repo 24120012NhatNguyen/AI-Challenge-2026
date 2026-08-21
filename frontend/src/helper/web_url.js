@@ -12,6 +12,6 @@
 
 // Thay tất cả bằng cái link ngrok mà bạn nhận được
 export const web_url = "https://donation-bonfire-putdown.ngrok-free.dev";
-export const socket_url = "https://seems-damages-act-criterion.trycloudflare.com";
-export const server = "https://seems-damages-act-criterion.trycloudflare.com/submit";
+export const socket_url = "https://gained-slideshow-sharp-spies.trycloudflare.com";
+export const server = "https://gained-slideshow-sharp-spies.trycloudflare.com/submit";
 export const session = "1";
