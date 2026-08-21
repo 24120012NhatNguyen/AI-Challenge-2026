@@ -222,7 +222,14 @@ class MyFaiss:
                 warnings.append(f"ocr: {type(e).__name__}: {e}")
 
         ###### SEARCHING BY ASR #####
-        if asr_input is not None:
+        if asr_input is not None and not getattr(self.asr_retrieval, "available", True):
+            reason = getattr(self.asr_retrieval, "unavailable_reason", "")
+            logger.warning("Bỏ qua ASR: %s", reason)
+            warnings.append(
+                "ASR không khả dụng (dữ liệu dataset lỗi)"
+                + (f": {reason}" if reason else "")
+            )
+        elif asr_input is not None:
             try:
                 asr_scores, asr_idx_image = self.asr_retrieval_helper(
                     asr_input, k, index if useid else None, semantic, keyword

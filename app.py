@@ -367,6 +367,12 @@ async def getrec(payload: Union[TagRequest, str, Dict[str, Any]] = Body(...)):
 
     if not text_query.strip():
         return []
+    if not getattr(TagRecommendation, "available", False):
+        logger.warning(
+            "Tag recommendation không khả dụng: %s",
+            getattr(TagRecommendation, "unavailable_reason", ""),
+        )
+        return []
     return [_normalize_tag(tag) for tag in TagRecommendation(text_query, k)]
 
 
@@ -586,9 +592,20 @@ def diagnostics():
     ocr_rows = CosineFaiss.ocr_retrieval.context_sparse_matrix_ocr.shape[0]
     add("ocr_matrix", ocr_rows == n_img, f"{ocr_rows} dòng / {n_img} keyframe")
 
-    asr_rows = CosineFaiss.asr_retrieval.context_matrix.shape[0]
+    asr = CosineFaiss.asr_retrieval
     n_audio = len(CosineFaiss.audio_id2img_id)
-    add("asr_matrix", asr_rows == n_audio, f"{asr_rows} dòng / {n_audio} đoạn ASR")
+    if getattr(asr, "available", False):
+        asr_rows = asr.context_matrix.shape[0]
+        add("asr_matrix", asr_rows == n_audio, f"{asr_rows} dòng / {n_audio} đoạn ASR")
+    else:
+        add("asr_matrix", False,
+            f"ASR TẮT - {getattr(asr, 'unavailable_reason', 'không rõ lý do')}. "
+            f"Các modality khác không bị ảnh hưởng.")
+
+    add("tag_recommendation", getattr(TagRecommendation, "available", False),
+        f"{TagRecommendation.index.ntotal} tag"
+        if getattr(TagRecommendation, "available", False)
+        else f"TẮT - {getattr(TagRecommendation, 'unavailable_reason', '')}")
 
     for name, matrix in CosineFaiss.object_retrieval.context_matrix.items():
         add(f"object_matrix_{name}", matrix.shape[0] == n_img,
@@ -609,8 +626,13 @@ def diagnostics():
         f"{N_SEARCH_SPACE} search space (1..{N_SEARCH_SPACE}), "
         f"{len(missing_videos)} video thiếu mapping")
 
+    # ASR / tag chỉ là modality phụ: tắt chúng KHÔNG làm hệ thống "không ok",
+    # nhưng vẫn được liệt kê trong "degraded" để biết mà xử lý.
+    optional = {"asr_matrix", "tag_recommendation"}
+    degraded = [c["name"] for c in checks if not c["ok"] and c["name"] in optional]
     return {
-        "ok": all(check["ok"] for check in checks),
+        "ok": all(c["ok"] for c in checks if c["name"] not in optional),
+        "degraded": degraded,
         "n_keyframes": n_img,
         "n_videos": len(Videoid2imgid),
         "asr_dir": getattr(CosineFaiss.asr_retrieval, "context_path", None),

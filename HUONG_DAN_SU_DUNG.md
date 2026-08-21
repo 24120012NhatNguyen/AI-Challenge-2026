@@ -35,16 +35,29 @@ python app.py          # cổng 8080
 python socket_app.py   # cổng 8081
 ```
 
-**Lần chạy đầu sau khi cập nhật code sẽ lâu hơn bình thường (thêm 2–5 phút).**
-Đó là do hệ thống tự phát hiện và build lại các chỉ mục bị lệch dữ liệu
-(ASR và tag). Trong log sẽ thấy:
+Hệ thống tự kiểm tra các chỉ mục lúc khởi động. Có 2 tình huống:
+
+**a) `dict/` ghi được** — chỉ mục lệch sẽ được **build lại tự động**, lần chạy đầu
+lâu thêm 2–5 phút, các lần sau nhanh như cũ:
 
 ```
-WARNING | Ma trận ASR lệch kích thước (12844 dòng, cần 25330). Xoá cache và build lại.
-WARNING | tag_embedding.bin lệch (4585 vector, cần 3163 tag ...). Build lại.
+WARNING | Ma trận ASR lệch kích thước (12844 dòng, cần 25330). Thử xoá cache và build lại.
 ```
 
-Đây là **bình thường và chỉ xảy ra một lần**. Các lần chạy sau sẽ nhanh như cũ.
+**b) `dict/` chỉ đọc (thường gặp trên Kaggle vì `dict/` là symlink tới
+`/kaggle/input`)** — không build lại được, hệ thống sẽ **tự tắt riêng phần đó**
+và ghi cảnh báo:
+
+```
+ASR KHÔNG KHẢ DỤNG - ma trận ASR lệch (12844 dòng != 25330) và không xoá được
+cache để build lại (thư mục chỉ đọc)
+App vẫn chạy bình thường; ô ASR trên Panel sẽ không trả kết quả.
+Các tính năng khác (text search, KNN, OCR, object, tag) không bị ảnh hưởng.
+```
+
+> ⚠️ **Đây KHÔNG phải lỗi khiến app chết.** App vẫn khởi động và mọi tính năng
+> khác chạy bình thường — chỉ riêng ô ASR (hoặc ô gợi ý tag) không dùng được.
+> Xem [mục 5](#asr-không-khả-dụng--ô-asr-không-ra-kết-quả) để biết cách xử lý.
 
 ### Bước 3 — Mở tunnel
 
@@ -153,9 +166,9 @@ liệu thật và có kết quả đúng.
 | Dải màu (red, white, yellow...) | Kéo khối màu vào lưới để tìm theo màu ở vị trí đó | `POST /panel` | **Hoạt động** |
 | Khung lưới 7×7 trắng | Kéo–thả icon/màu vào đúng vị trí muốn tìm trong khung hình | `POST /panel` | **Hoạt động** |
 | Ô `Search for tags` | Chọn tag từ từ điển 1199 tag có sẵn | `POST /panel` (`tags`) | **Hoạt động** |
-| Ô `Query to get tag recommendations` + 🔍 | Gõ câu mô tả → gợi ý tag phù hợp, bấm để thêm | `POST /getrec` | **Hoạt động** (trước đây lỗi 500, đã sửa) |
+| Ô `Query to get tag recommendations` + 🔍 | Gõ câu mô tả → gợi ý tag phù hợp, bấm để thêm | `POST /getrec` | **Hoạt động** khi `tag_embedding.bin` khớp dữ liệu; nếu lệch và `dict/` chỉ đọc thì ô này trả rỗng, phần còn lại vẫn chạy |
 | Ô `OCR` | Tìm chữ **xuất hiện trên màn hình** | `POST /panel` (`ocr`) | **Hoạt động** |
-| Ô `ASR` | Tìm lời **được nói** trong video | `POST /panel` (`asr`) | **Hoạt động** (trước đây sập, đã sửa) |
+| Ô `ASR` | Tìm lời **được nói** trong video | `POST /panel` (`asr`) | **Hoạt động khi dữ liệu ASR của dataset đúng.** Nếu dataset ASR hỏng → ô này không ra kết quả và Panel báo "ASR không khả dụng"; **các ô khác vẫn chạy bình thường** |
 | Ô `Specify maximum number of objects...` | Giới hạn số lượng vật thể, vd. `person1, car2` | `POST /panel` (`amount`) | **Hoạt động** |
 | Ô `K` (trong Panel) | Số kết quả Panel trả về | `POST /panel` | **Hoạt động.** Xoá trắng tự về 500 |
 | Checkbox `ID` | Chỉ tìm trong kết quả của khung tìm kiếm chính | `POST /panel` (`useid`) | **Hoạt động** |
@@ -334,6 +347,34 @@ Nếu vẫn gặp: bạn đang chạy code cũ trên Kaggle → `git pull` rồi
 Gõ sai tên video. Copy đúng chuỗi ở **cột cam bên trái hàng ảnh** (vd. `L21_V024`).
 Thông báo lỗi cũng nhắc lại định dạng hợp lệ.
 
+### <a id="asr-không-khả-dụng--ô-asr-không-ra-kết-quả"></a>"ASR không khả dụng (dữ liệu dataset lỗi)"
+
+Ô ASR không ra kết quả và Panel hiện cảnh báo này. **Đây là lỗi dữ liệu của
+dataset, không phải lỗi code, và KHÔNG làm chết hệ thống** — text search, KNN,
+OCR, object, tag đều chạy bình thường.
+
+Nguyên nhân: ma trận ASR dựng sẵn trong dataset có số dòng không khớp số câu
+ASR thô (vd. 12844 vs 25330), nên không thể tra cứu.
+
+Xử lý theo thứ tự:
+
+1. **Chấp nhận và thi tiếp** — dùng OCR + text search thay cho ASR. Đây là
+   phương án khuyến nghị trong lúc thi.
+2. **Nếu dữ liệu ASR thô đúng mà chỉ cache lệch**, và `dict/` chỉ đọc: trỏ cache
+   sang thư mục ghi được **trước khi** chạy `app.py`:
+   ```python
+   import os
+   os.environ["ASR_CACHE_DIR"] = "/kaggle/working/asr_cache_rebuilt"
+   ```
+   ```bash
+   ASR_CACHE_DIR=/kaggle/working/asr_cache_rebuilt python app.py
+   ```
+   Hệ thống sẽ build lại cache ở đó (mất vài phút) và ASR hoạt động trở lại.
+3. **Nếu sau bước 2 vẫn báo lệch** → dữ liệu thô của dataset thật sự hỏng,
+   không sửa được từ phía code. Tải lại dataset `dict/` bản khác, hoặc bỏ ASR.
+
+Kiểm tra bằng `/diagnostics`: mục `asr_matrix` sẽ hiện `"ASR TẮT - ..."` kèm lý do.
+
 ### Panel hiện "Panel search cảnh báo: asr: ..."
 Một kênh gặp sự cố nhưng các kênh còn lại vẫn chạy — kết quả hiển thị là của
 các kênh còn lại. Xem log backend trên Kaggle để biết chi tiết.
@@ -365,6 +406,7 @@ Kết quả mong đợi:
 ```json
 {
   "ok": true,
+  "degraded": [],
   "n_keyframes": 97358,
   "n_videos": 785,
   "asr_dir": ".../dict/audio_ARS",
@@ -380,12 +422,16 @@ Kết quả mong đợi:
 
 **Cách đọc:**
 
-- `"ok": true` → mọi chỉ mục khớp dữ liệu, yên tâm thi.
-- `"ok": false` → tìm mục nào có `"ok": false` trong `checks`:
+- `"ok": true` và `"degraded": []` → mọi chỉ mục khớp dữ liệu, yên tâm thi.
+- `"ok": true` nhưng `"degraded": ["asr_matrix"]` → **hệ thống vẫn dùng được
+  bình thường**, chỉ riêng modality trong danh sách bị tắt do dữ liệu dataset
+  hỏng. ASR và tag là modality phụ nên không kéo `ok` xuống `false`.
+- `"ok": false` → có chỉ mục cốt lõi hỏng; tìm mục `"ok": false` trong `checks`:
 
 | Mục lỗi | Hậu quả | Cách xử lý |
 |---|---|---|
-| `asr_matrix` | Ô ASR không dùng được | Xoá `dict/bin/audio_bin/` rồi khởi động lại `app.py` |
+| `asr_matrix` | Ô ASR không dùng được (app **vẫn chạy**) | Xem [mục xử lý ASR](#asr-không-khả-dụng--ô-asr-không-ra-kết-quả) |
+| `tag_recommendation` | Ô gợi ý tag trả rỗng (app **vẫn chạy**) | Xoá `dict/bin/tag_bin/` rồi khởi động lại, nếu `dict/` ghi được |
 | `ocr_matrix` | Ô OCR không dùng được | Xoá `dict/bin/ocr_bin/` rồi khởi động lại |
 | `object_matrix_*` | Panel kéo icon/màu không dùng được | Xoá `dict/bin/contexts_bin/` rồi khởi động lại |
 | `faiss_nomic` / `faiss_clipv2` | Tìm kiếm text sai lệch | Dataset `dict/` không khớp bộ ảnh — tải lại dataset |
