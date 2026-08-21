@@ -73,3 +73,6 @@ ai_env/
 venv/
 frontend/node_modules/
 __pycache__/
+
+# Dữ liệu đáp án runtime (mỗi máy tự sinh)
+back_up/

@@ -29,7 +29,7 @@ function SearchTag({ addTag }) {
               onClick={() => addTag(tag)}
               className="h-fit relative cursor-pointer hover:ring-2 ring-slate-400 w-max bg-slate-700 p-0.5 rounded-md "
             >
-              {tag.replace("_", " ")}
+              {tag.replace(/_/g, " ")}
             </span>
           ))}
         </div>

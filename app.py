@@ -1,9 +1,9 @@
 import copy
 import json
-from typing import Optional
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from utils.combine_utils import merge_searching_results_by_addition
@@ -20,6 +20,7 @@ from utils.models import (
 from utils.parse_frontend import parse_data
 from utils.search_utils import (
     _parse_keyframe_path,
+    canonical_video_name,
     group_result_by_video,
     search_by_filter,
 )
@@ -55,20 +56,78 @@ with open("dict/video_id2img_id.json", "r") as f:
     Videoid2imgid = json.load(f)
 
 
+def _build_video_key_aliases():
+    """Map mọi cách viết video_id mà người dùng có thể gõ -> key thật trong
+    dict/video_id2img_id.json.
+
+    Key thật có dạng "L21_V001" (không có phần data_part hậu tố), trong khi UI
+    lại hiển thị "L21_a_V001" (ghép từ đường dẫn keyframe
+    /static/images/Keyframes/L21_a/V001/000000.jpg). Nếu chỉ tra trực tiếp thì
+    ID copy từ UI luôn báo "Video không tồn tại".
+    """
+    aliases = dict()
+
+    def put(name, canonical):
+        if name:
+            aliases.setdefault(name.strip().upper(), canonical)
+
+    for canonical, idxs in Videoid2imgid.items():
+        put(canonical, canonical)
+        if not idxs:
+            continue
+        data_part, video_id, _ = _parse_keyframe_path(
+            DictImagePath[idxs[0]]["image_path"]
+        )
+        # "L21_a" + "V001" -> "L21_a_V001" (đúng cái UI hiển thị)
+        put(f"{data_part}_{video_id}", canonical)
+        put(f"{data_part}/{video_id}", canonical)
+        put(f"{data_part}_{video_id}".replace("_extract", "").replace("_extra", ""),
+            canonical)
+    return aliases
+
+
+VideoKeyAliases = _build_video_key_aliases()
+
+
+def resolve_video_key(video_id: str):
+    """Chuẩn hoá video_id người dùng nhập về key thật, hoặc None nếu không có."""
+    if not video_id:
+        return None
+    return VideoKeyAliases.get(video_id.strip().upper())
+
+
 # Helper functions
 def get_search_space(id):
-    # id starting from 1 to 4
+    # id starting from 1 to N (N = số list_* trong dict/video_division_tag.json)
     search_space = []
     video_space = VideoDivision[f"list_{id}"]
     for video_id in video_space:
-        search_space.extend(Videoid2imgid[video_id])
+        if video_id in Videoid2imgid:
+            search_space.extend(Videoid2imgid[video_id])
+        else:
+            logger.warning("search space: video '%s' không có trong video_id2img_id", video_id)
     return search_space
 
 
+# Trước đây chỉ build 1..4 trong khi file có tới list_5 -> chọn Space=5 trên UI
+# làm KeyError và trả 500. Giờ build đúng số list thật sự có.
+N_SEARCH_SPACE = sum(1 for key in VideoDivision if key.startswith("list_"))
 SearchSpace = dict()
-for i in range(1, 5):
+for i in range(1, N_SEARCH_SPACE + 1):
     SearchSpace[i] = np.array(get_search_space(i)).astype("int64")
 SearchSpace[0] = TotalIndexList
+
+
+def get_search_space_index(search_space_index):
+    """Trả về mảng index của search space, tự lùi về 0 (toàn bộ) nếu không hợp lệ."""
+    if search_space_index not in SearchSpace:
+        logger.warning(
+            "search_space=%s không hợp lệ (hợp lệ: 0..%d), dùng 0 (toàn bộ)",
+            search_space_index,
+            N_SEARCH_SPACE,
+        )
+        return SearchSpace[0]
+    return SearchSpace[search_space_index]
 
 
 def get_near_frame(idx):
@@ -160,9 +219,9 @@ def text_search(request: TextSearchRequest):
             index = keep_index
 
     if index is None:
-        index = SearchSpace[search_space_index]
+        index = get_search_space_index(search_space_index)
     else:
-        index = np.intersect1d(index, SearchSpace[search_space_index])
+        index = np.intersect1d(index, get_search_space_index(search_space_index))
     k = min(k, len(index))
 
     if nomic and clipv2:
@@ -244,9 +303,9 @@ def panel(request: PanelSearchRequest):
             index = keep_index
 
     if index is None:
-        index = SearchSpace[search_space_index]
+        index = get_search_space_index(search_space_index)
     else:
-        index = np.intersect1d(index, SearchSpace[search_space_index])
+        index = np.intersect1d(index, get_search_space_index(search_space_index))
     k = min(k, len(index))
 
     # Parse json input
@@ -256,7 +315,7 @@ def panel(request: PanelSearchRequest):
 
     semantic = False
     keyword = True
-    lst_scores, list_ids, _, list_image_paths = CosineFaiss.context_search(
+    lst_scores, list_ids, _, list_image_paths, warnings = CosineFaiss.context_search(
         object_input=object_input,
         ocr_input=ocr_input,
         asr_input=asr_input,
@@ -267,17 +326,48 @@ def panel(request: PanelSearchRequest):
         useid=request.useid,
     )
 
-    data = group_result_by_video(lst_scores, list_ids, list_image_paths)
-    return data
+    videos = group_result_by_video(lst_scores, list_ids, list_image_paths)
+    if warnings:
+        logger.warning("panel search warnings: %s", warnings)
+    # Trả về object thay vì list thuần để kèm được "warnings"; frontend chấp
+    # nhận cả hai dạng (xem Panel.jsx) nên vẫn tương thích ngược.
+    return {"videos": videos, "warnings": warnings}
+
+
+# dict/tag/tag_list.txt lưu tag dạng có dấu cách ("race car") nhưng từ điển
+# tf-idf của object retrieval lại dùng dạng gạch dưới ("race_car"). Nếu trả
+# nguyên dạng có dấu cách, tag nhiều chữ được gợi ý sẽ không khớp gì khi bấm
+# vào và gửi qua /panel.
+TagVocab = set(CosineFaiss.object_retrieval.tag_corpus)
+
+
+def _normalize_tag(tag: str) -> str:
+    """Đưa tag về đúng dạng trong từ điển tf-idf (dạng gạch dưới)."""
+    if tag in TagVocab:
+        return tag
+    underscored = tag.replace(" ", "_")
+    return underscored if underscored in TagVocab else tag
 
 
 @app.post("/getrec")
-def getrec(request: TagRequest):
+async def getrec(payload: Union[TagRequest, str, Dict[str, Any]] = Body(...)):
+    """Gợi ý tag từ câu truy vấn.
+
+    Frontend gửi thẳng một chuỗi JSON (vd. `"con mèo"`), nên endpoint chấp nhận
+    cả chuỗi trần lẫn object {"text": "..."} để không trả 422.
+    """
     logger.info("get tag recommendation")
     k = 50
-    text_query = request.text
-    tag_outputs = TagRecommendation(text_query, k)
-    return tag_outputs
+    if isinstance(payload, TagRequest):
+        text_query = payload.text
+    elif isinstance(payload, dict):
+        text_query = payload.get("text", "") or payload.get("textquery", "")
+    else:
+        text_query = payload or ""
+
+    if not text_query.strip():
+        return []
+    return [_normalize_tag(tag) for tag in TagRecommendation(text_query, k)]
 
 
 @app.get("/relatedimg")
@@ -333,6 +423,8 @@ def get_video_shot(imgid: Optional[str] = None):
     data = {
         "collection": scene_idx[0],
         "video_id": scene_idx[1],
+        # tên video chuẩn để nộp bài / tra FrameRange (vd. "L21_V001")
+        "video_name": canonical_video_name(scene_idx[0], scene_idx[1]),
         "shots": shots,
         "selected_shot": scene_idx[3],
     }
@@ -365,9 +457,17 @@ def frame_range(
     logger.info("frame range: video_id=%s, start=%d, end=%d, text_query=%s, model_type=%s",
                 video_id, start, end, text_query, model_type)
 
-    all_idxs = Videoid2imgid.get(video_id, None)
+    canonical_id = resolve_video_key(video_id)
+    all_idxs = Videoid2imgid.get(canonical_id) if canonical_id else None
     if all_idxs is None:
-        return {"error": f"Video '{video_id}' không tồn tại", "status_code": 404}
+        return {
+            "error": (
+                f"Video '{video_id}' không tồn tại. "
+                f"Định dạng hợp lệ: 'L21_a_V001' (như hiển thị trên UI) hoặc 'L21_V001'."
+            ),
+            "status_code": 404,
+        }
+    video_id = canonical_id
 
     # Filter keyframes within [start, end] range
     range_items = []  # list of (frame_id, idx, image_path)
@@ -446,8 +546,14 @@ def frame_range(
 
 @app.post("/feedback")
 def feed_back(request: FeedbackRequest):
+    logger.info("feedback rerank")
     k = request.k
     prev_result = request.videos
+    if isinstance(prev_result, dict):
+        # client cũ có thể gửi {video_id: {...}}; đưa về dạng list thống nhất
+        prev_result = list(prev_result.values())
+    if not prev_result:
+        return []
     lst_pos_vote_idxs = request.lst_pos_idxs
     lst_neg_vote_idxs = request.lst_neg_idxs
     lst_scores, list_ids, _, list_image_paths = CosineFaiss.reranking(
@@ -462,6 +568,55 @@ def translate(request: TranslateRequest):
     text_query = request.textquery
     text_query_translated = CosineFaiss.translater(text_query)
     return text_query_translated
+
+
+@app.get("/diagnostics")
+def diagnostics():
+    """Tự kiểm tra sức khoẻ hệ thống: kích thước các ma trận, mapping, search space.
+
+    Dùng để phát hiện sớm lỗi lệch dữ liệu (vd. ma trận ASR/OCR không khớp số
+    keyframe) trước khi thi đấu.
+    """
+    n_img = len(DictImagePath)
+    checks = []
+
+    def add(name, ok, detail):
+        checks.append({"name": name, "ok": bool(ok), "detail": detail})
+
+    ocr_rows = CosineFaiss.ocr_retrieval.context_sparse_matrix_ocr.shape[0]
+    add("ocr_matrix", ocr_rows == n_img, f"{ocr_rows} dòng / {n_img} keyframe")
+
+    asr_rows = CosineFaiss.asr_retrieval.context_matrix.shape[0]
+    n_audio = len(CosineFaiss.audio_id2img_id)
+    add("asr_matrix", asr_rows == n_audio, f"{asr_rows} dòng / {n_audio} đoạn ASR")
+
+    for name, matrix in CosineFaiss.object_retrieval.context_matrix.items():
+        add(f"object_matrix_{name}", matrix.shape[0] == n_img,
+            f"{matrix.shape[0]} dòng / {n_img} keyframe")
+
+    add("faiss_nomic", CosineFaiss.index_nomic.ntotal == n_img,
+        f"{CosineFaiss.index_nomic.ntotal} vector / {n_img} keyframe")
+    add("faiss_clipv2", CosineFaiss.index_clipv2.ntotal == n_img,
+        f"{CosineFaiss.index_clipv2.ntotal} vector / {n_img} keyframe")
+    add("img_id2audio_id", len(CosineFaiss.img_id2audio_id) == n_img,
+        f"{len(CosineFaiss.img_id2audio_id)} entry / {n_img} keyframe")
+
+    missing_videos = [
+        v for key in VideoDivision if key.startswith("list_")
+        for v in VideoDivision[key] if v not in Videoid2imgid
+    ]
+    add("video_division", not missing_videos,
+        f"{N_SEARCH_SPACE} search space (1..{N_SEARCH_SPACE}), "
+        f"{len(missing_videos)} video thiếu mapping")
+
+    return {
+        "ok": all(check["ok"] for check in checks),
+        "n_keyframes": n_img,
+        "n_videos": len(Videoid2imgid),
+        "asr_dir": getattr(CosineFaiss.asr_retrieval, "context_path", None),
+        "example_video_id": next(iter(Videoid2imgid)),
+        "checks": checks,
+    }
 
 
 if __name__ == "__main__":

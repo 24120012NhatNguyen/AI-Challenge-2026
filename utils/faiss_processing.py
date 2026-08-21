@@ -7,10 +7,13 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 from utils.combine_utils import merge_searching_results_by_addition
+from utils.logger_config import get_logger
 from utils.nlp_processing import Translation
 from utils.object_retrieval_engine.object_retrieval import object_retrieval
 from utils.ocr_retrieval_engine.ocr_retrieval import ocr_retrieval
 from utils.semantic_embed.speech_retrieval import speech_retrieval
+
+logger = get_logger(__name__)
 
 
 class MyFaiss:
@@ -112,7 +115,7 @@ class MyFaiss:
     def asr_post_processing(self, tmp_asr_scores, tmp_asr_idx_image, k):
         result = dict()
         for asr_idx, asr_score in zip(tmp_asr_idx_image, tmp_asr_scores):
-            lst_ids = self.audio_id2img_id[asr_idx]
+            lst_ids = self.audio_id2img_id.get(int(asr_idx)) or []
             for idx in lst_ids:
                 if result.get(idx, None) is None:
                     result[idx] = asr_score
@@ -129,12 +132,17 @@ class MyFaiss:
         if index is not None:
             audio_temp = dict()
             for idx in index:
-                audio_idxes = self.img_id2audio_id[idx]
+                audio_idxes = self.img_id2audio_id.get(int(idx))
+                if not audio_idxes:
+                    continue
                 for audio_idx in audio_idxes:
                     if audio_temp.get(audio_idx, None) is None:
                         audio_temp[audio_idx] = [idx]
                     else:
                         audio_temp[audio_idx].append(idx)
+
+            if not audio_temp:
+                return np.array([]), np.array([], dtype="int64")
 
             audio_index = np.array(list(audio_temp.keys())).astype("int64")
             tmp_asr_scores, tmp_asr_idx_image = self.asr_retrieval(
@@ -185,39 +193,63 @@ class MyFaiss:
         }
         """
         scores, idx_image = [], []
+        warnings = []
+
+        # Mỗi modality được cô lập: một khối lỗi chỉ làm mất kết quả của
+        # riêng nó, các khối còn lại vẫn chạy và request vẫn trả 200.
         ###### SEARCHING BY OBJECT #####
         if object_input is not None:
-            object_scores, object_idx_image = self.object_retrieval(
-                object_input, k=k, index=index
-            )
-            scores.append(object_scores)
-            idx_image.append(object_idx_image)
+            try:
+                object_scores, object_idx_image = self.object_retrieval(
+                    object_input, k=k, index=index
+                )
+                scores.append(object_scores)
+                idx_image.append(object_idx_image)
+            except Exception as e:
+                logger.exception("Object retrieval failed")
+                warnings.append(f"object: {type(e).__name__}: {e}")
 
         ###### SEARCHING BY OCR #####
         if ocr_input is not None:
-            ocr_scores, ocr_idx_image = self.ocr_retrieval(ocr_input, k=k, index=index)
-            scores.append(ocr_scores)
-            idx_image.append(ocr_idx_image)
+            try:
+                ocr_scores, ocr_idx_image = self.ocr_retrieval(
+                    ocr_input, k=k, index=index
+                )
+                scores.append(ocr_scores)
+                idx_image.append(ocr_idx_image)
+            except Exception as e:
+                logger.exception("OCR retrieval failed")
+                warnings.append(f"ocr: {type(e).__name__}: {e}")
 
         ###### SEARCHING BY ASR #####
         if asr_input is not None:
-            if not useid:
+            try:
                 asr_scores, asr_idx_image = self.asr_retrieval_helper(
-                    asr_input, k, None, semantic, keyword
+                    asr_input, k, index if useid else None, semantic, keyword
                 )
-            else:
-                asr_scores, asr_idx_image = self.asr_retrieval_helper(
-                    asr_input, k, index, semantic, keyword
-                )
-            scores.append(asr_scores)
-            idx_image.append(asr_idx_image)
+                scores.append(asr_scores)
+                idx_image.append(asr_idx_image)
+            except Exception as e:
+                logger.exception("ASR retrieval failed")
+                warnings.append(f"asr: {type(e).__name__}: {e}")
+
+        if not scores:
+            return [], [], [], [], warnings
 
         scores, idx_image = merge_searching_results_by_addition(scores, idx_image)
 
         ###### GET INFOS KEYFRAMES_ID ######
-        infos_query = list(map(self.id2img.get, list(idx_image)))
+        infos_query = [self.id2img.get(int(idx)) for idx in idx_image]
+        keep = [i for i, info in enumerate(infos_query) if info is not None]
+        if len(keep) != len(infos_query):
+            logger.warning(
+                "context_search: bỏ %d idx không có trong id2img", len(infos_query) - len(keep)
+            )
+            scores = [scores[i] for i in keep]
+            idx_image = [idx_image[i] for i in keep]
+            infos_query = [infos_query[i] for i in keep]
         image_paths = [info["image_path"] for info in infos_query]
-        return scores, idx_image, infos_query, image_paths
+        return scores, idx_image, infos_query, image_paths, warnings
 
     def reranking(self, prev_result, lst_pos_vote_idxs, lst_neg_vote_idxs, k):
         """
@@ -237,7 +269,10 @@ class MyFaiss:
                 result[id] = score
 
         for key in lst_neg_vote_idxs:
-            result.pop(key)
+            result.pop(key, None)
+
+        if not result:
+            return [], [], [], []
 
         id_selector = faiss.IDSelectorArray(
             np.array(list(result.keys())).astype("int64")

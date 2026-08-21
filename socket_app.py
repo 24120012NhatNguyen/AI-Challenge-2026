@@ -11,7 +11,7 @@ from fastapi.responses import Response
 
 from utils.logger_config import get_logger
 from utils.models import QuestionNameRequest, UsernameRequest, UserRequest
-from utils.search_utils import _parse_keyframe_path
+from utils.search_utils import _parse_keyframe_path, canonical_video_name
 
 logger = get_logger(__name__)
 
@@ -171,7 +171,7 @@ def index2info(lst_idxs):
     for idx in lst_idxs:
         image_path = DictImagePath[idx]["image_path"]
         data_part, video_id, frame_id = _parse_keyframe_path(image_path)
-        key = f"{data_part}_{video_id}".replace("_extract", "").replace("_extra", "")
+        key = canonical_video_name(data_part, video_id)
         frame_id = int(frame_id)
 
         info["lst_keyframe_idxs"].append(frame_id)
@@ -224,7 +224,10 @@ async def clearsubmit(sid, data):
     ques_name = data["questionName"]
     ques_idx = int(data["idx"])
     clear_submit_helper(ques_name, ques_idx)
-    result = {"questionName": ques_name, "data": index2info(AnswerDict[ques_name])}
+    result = {
+        "questionName": ques_name,
+        "data": index2info(AnswerDict.get(ques_name, [])),
+    }
     await sio.emit("clearsubmit", result)
 
 
@@ -245,11 +248,13 @@ async def clearignore(sid, data):
     ques_name = data["questionName"]
     ques_idx = data["idx"]
     clear_ignore_helper(ques_name, ques_idx)
+    # Kênh phải là "ignore" (không phải "clearsubmit") và payload phải là danh
+    # sách idx thô - đúng dạng mà FE dùng cho getIgnoredImages().
     result = {
         "questionName": ques_name,
-        "data": index2info(AnswerIgnoreDict[ques_name]),
+        "data": AnswerIgnoreDict.get(ques_name, []),
     }
-    await sio.emit("clearsubmit", result)
+    await sio.emit("ignore", result)
 
 
 ##################### Reorder #################################
@@ -263,10 +268,15 @@ async def reorder(sid, data):
         store_answer()
 
     # Reset status of active_reorder once received reroder
+    ReorderStatus.setdefault(ques_name, dict(status=False, owner=""))
     ReorderStatus[ques_name]["status"] = False
     ReorderStatus[ques_name]["owner"] = ""
+    store_status()
 
-    result = {"questionName": ques_name, "data": index2info(AnswerDict[ques_name])}
+    result = {
+        "questionName": ques_name,
+        "data": index2info(AnswerDict.get(ques_name, [])),
+    }
     await sio.emit("reorder", result)
 
 
@@ -282,6 +292,7 @@ async def activereorder(sid, data):
         "is_accepted": False,
     }
     # If is_admin: pass
+    ReorderStatus.setdefault(ques_name, dict(status=False, owner=""))
     if ReorderStatus[ques_name]["status"] and not is_admin:
         logger.error("Reorder an active question error")
         # emit's first argument must be the same name as that of the channel on client-side
@@ -289,6 +300,7 @@ async def activereorder(sid, data):
     else:
         ReorderStatus[ques_name]["status"] = True
         ReorderStatus[ques_name]["owner"] = user
+        store_status()
         status["is_accepted"] = True
         await sio.emit("activereorder", status)
 
@@ -366,7 +378,8 @@ def _build_kis_csv_content(lst_idxs):
     lines = []
     for video_name, frame_id in zip(info["lst_video_idxs"], info["lst_keyframe_idxs"]):
         lines.append(f"{video_name},{frame_id}")
-    return "\n".join(lines)
+    # kết thúc bằng newline để công cụ chấm không nuốt mất dòng cuối
+    return "\n".join(lines) + "\n"
 
 
 @app.get("/export/kis")

@@ -18,10 +18,10 @@ function SearchTag({ addTag, web_url, recTags, setRecTags }) {
         "ngrok-skip-browser-warning": "69420",
         "Content-Type": "application/json",
       }),
-      body: JSON.stringify(query),
+      body: JSON.stringify({ text: query }),
     })
       .then((data) => data.json())
-      .then((result) => setRecTags(result))
+      .then((result) => setRecTags(Array.isArray(result) ? result : []))
       .catch((e) => alert("getrec failed!" + e));
   };
 
@@ -51,7 +51,7 @@ function SearchTag({ addTag, web_url, recTags, setRecTags }) {
               onClick={() => addTag(tag)}
               className="relative cursor-pointer hover:ring-2 ring-slate-400 w-max bg-slate-700 p-1 rounded-md mx-1 mb-1"
             >
-              {tag.replace("_", " ")}
+              {tag.replace(/_/g, " ")}
             </span>
           ))}
         </div>

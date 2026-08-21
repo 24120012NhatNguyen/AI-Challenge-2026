@@ -305,6 +305,10 @@ function Index() {
         .then((data) => {
           ignoreIndexes = data.data;
           textSearchFetch(ignoreIndexes);
+        })
+        .catch((e) => {
+          alert("Không lấy được danh sách ignore: " + e);
+          setLoading(false);
         });
     } else textSearchFetch(ignoreIndexes);
   };
@@ -326,10 +330,10 @@ function Index() {
         "ngrok-skip-browser-warning": "69420",
         "Content-Type": "application/json",
       }),
-      body: JSON.stringify(query),
+      body: JSON.stringify({ text: query }),
     })
       .then((data) => data.json())
-      .then((result) => setRecTags(result))
+      .then((result) => setRecTags(Array.isArray(result) ? result : []))
       .catch((e) => alert("getrec failed!" + e));
   };
 
@@ -338,10 +342,18 @@ function Index() {
     fetch(`${web_url}/imgsearch?imgid=${imgId}&k=${k}`, fetchGetObj)
       .then((res) => res.json())
       .then((data) => {
+        if (!Array.isArray(data)) {
+          alert("KNN failed: " + JSON.stringify(data));
+          setLoading(false);
+          return;
+        }
         handleData(data);
         setLoading(false);
       })
-      .catch((e) => console.log(`KNN Fetch Failed ${e}`));
+      .catch((e) => {
+        alert(`KNN Fetch Failed: ${e}`);
+        setLoading(false);
+      });
   };
 
   const toggleFullScreen = (image) => {
@@ -412,7 +424,22 @@ function Index() {
     })
       .then((res) => res.json())
       .then((data) => {
+        if (!Array.isArray(data)) {
+          const detail = data && data.detail;
+          alert(
+            "Feedback failed: " +
+              (Array.isArray(detail)
+                ? detail.map((err) => err.msg || JSON.stringify(err)).join("\n")
+                : detail || JSON.stringify(data))
+          );
+          setLoading(false);
+          return;
+        }
         handleData(data);
+        setLoading(false);
+      })
+      .catch((e) => {
+        alert("Feedback Fetch Failed! " + e);
         setLoading(false);
       });
   };
@@ -427,13 +454,21 @@ function Index() {
   const addView = (id) => {
     if (questionName === "") {
       alert("Choose question first");
-    } else {
-      socket.emit("submit", {
-        questionName: questionName,
-        idx: id,
-        user: username,
-      });
+      return;
     }
+    if (!socket.connected) {
+      alert(
+        "Mất kết nối tới socket server (" +
+          socket_url +
+          "). Đáp án chưa được lưu. Kiểm tra tunnel rồi thử lại."
+      );
+      return;
+    }
+    socket.emit("submit", {
+      questionName: questionName,
+      idx: id,
+      user: username,
+    });
   };
 
   const handleSelect = (id, video) => {
@@ -453,14 +488,25 @@ function Index() {
   };
 
   const handleIgnore = (lst_idxs) => {
-    if (questionName === "") alert("Choose question first");
-    else {
-      socket.emit("ignore", {
-        questionName: questionName,
-        idx: lst_idxs,
-        autoIgnore: false,
-      });
+    if (questionName === "") {
+      alert("Choose question first");
+      return;
     }
+    if (!socket.connected) {
+      // Không có setLoading ở đây, nhưng nếu socket rớt thì lệnh ignore bị nuốt
+      // im lặng và ảnh không bao giờ được đánh dấu -> báo rõ thay vì "treo".
+      alert(
+        "Mất kết nối tới socket server (" +
+          socket_url +
+          "). Kiểm tra lại tunnel cloudflared / web_url.js rồi thử lại."
+      );
+      return;
+    }
+    socket.emit("ignore", {
+      questionName: questionName,
+      idx: lst_idxs,
+      autoIgnore: false,
+    });
   };
 
   const handleAutoIgnore = (page, isAutoFetched = false) => {
@@ -553,6 +599,10 @@ function Index() {
           })
             .then((data) => data.json())
             .then((data) => {
+              if (!Array.isArray(data)) {
+                showDialog("failure", "Auto Fetch Failed: " + JSON.stringify(data));
+                return;
+              }
               showDialog("success", "Auto Fetched!");
               setQueryHistory([
                 ...queryHistory,

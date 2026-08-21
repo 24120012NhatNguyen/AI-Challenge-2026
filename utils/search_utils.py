@@ -16,11 +16,24 @@ def _parse_keyframe_path(image_path):
     raise ValueError(f"Unexpected image_path format: {image_path!r}")
 
 
+def canonical_video_name(data_part, video_id):
+    """Ghép tên video chuẩn dùng chung cho UI, CSV nộp bài và tra cứu.
+
+    Keyframe nằm ở .../Keyframes/<data_part>/<video_id>/<frame>.jpg với
+    data_part là thư mục tải về theo lô ("L21_a", "L26_c", "L26_extract"),
+    còn tên video thật của BTC chỉ gồm phần trước dấu "_" ("L21", "L26").
+    Vì vậy "L21_a" + "V001" -> "L21_V001", đúng với key trong
+    dict/video_id2img_id.json và dict/video_division_tag.json.
+    """
+    collection = data_part.split("_")[0]
+    return f"{collection}_{video_id}"
+
+
 def group_result_by_video(lst_scores, list_ids, list_image_paths):
     result_dict = dict()
     for i, image_path in enumerate(list_image_paths):
         data_part, video_id, frame_id = _parse_keyframe_path(image_path)
-        key = f"{data_part}_{video_id}".replace("_extract", "")
+        key = canonical_video_name(data_part, video_id)
 
         frame_id = int(frame_id)
 
@@ -66,9 +79,7 @@ def search_by_filter(
         for idx in ignore_index:
             image_path = DictImagePath[idx]["image_path"]
             data_part, video_id, _ = _parse_keyframe_path(image_path)
-            key = f"{data_part}_{video_id}".replace("_extract", "").replace(
-                "_extra", ""
-            )
+            key = canonical_video_name(data_part, video_id)
             if ignore_videos.get(key, False):
                 ignore_videos[key].append(idx)
             else:
@@ -145,7 +156,7 @@ def search_by_filter(
 
     for i, image_path in enumerate(list_image_paths):
         data_part, video_id, frame_id = _parse_keyframe_path(image_path)
-        key = f"{data_part}_{video_id}".replace("_extract", "").replace("_extra", "")
+        key = canonical_video_name(data_part, video_id)
 
         result_dict[key]["video_info"]["lst_keyframe_paths"].append(image_path)
         result_dict[key]["video_info"]["lst_idxs"].append(int(list_ids[i]))

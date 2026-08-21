@@ -141,11 +141,28 @@ function panel({
       .then((data) => data.json())
       .then((res) => {
         console.log(res);
+        // Backend trả {videos: [...], warnings: [...]}; vẫn nhận dạng list cũ.
+        const list = Array.isArray(res) ? res : res && res.videos ? res.videos : [];
+        const warnings = (res && res.warnings) || [];
+        if (!Array.isArray(res) && !res.videos && res.detail) {
+          const detail = res.detail;
+          alert(
+            "Panel search failed: " +
+              (Array.isArray(detail)
+                ? detail.map((err) => err.msg || JSON.stringify(err)).join("\n")
+                : detail)
+          );
+        } else if (warnings.length > 0) {
+          alert("Panel search cảnh báo:\n" + warnings.join("\n"));
+        }
         setPage(0);
-        setVideos(res);
+        setVideos(list);
         setLoading(false);
       })
-      .catch((e) => alert("Fetch failed!" + e));
+      .catch((e) => {
+        alert("Fetch failed!" + e);
+        setLoading(false);
+      });
   };
 
   const sendPanel = () => {
@@ -166,6 +183,10 @@ function panel({
         .then((data) => {
           ignoreIndexes = data.data;
           panelFetch(ignoreIndexes);
+        })
+        .catch((e) => {
+          alert("Không lấy được danh sách ignore: " + e);
+          setLoading(false);
         });
     } else panelFetch(ignoreIndexes);
   };
@@ -311,7 +332,7 @@ function panel({
                 key={tag}
                 className="h-8 relative cursor-pointer hover:ring-2 ring-slate-400 w-max bg-slate-800 p-0.5 rounded-md"
               >
-                {tag.replace("_", " ")}
+                {tag.replace(/_/g, " ")}
               </span>
             ))}
         </div>
@@ -330,7 +351,8 @@ function panel({
           placeholder="K"
           className="w-12 flex-none transition-all hover:drop-shadow-[0px_4px_3px_rgba(255,255,255,0.2)] placeholder:italic  text-slate-300  relative p-0.5 indent-1 rounded-md bg-slate-800"
           onChange={(e) => {
-            setPanelK(e.target.value);
+            const val = e.target.value === "" ? 500 : Number(e.target.value);
+            setPanelK(Number.isNaN(val) ? 500 : val);
           }}
           value={panelK}
         ></input>

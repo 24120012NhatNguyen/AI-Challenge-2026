@@ -42,7 +42,11 @@ function Video() {
         .then((data) => {
           console.log(router);
           setVideos(data);
-          videoId = `${data.collection}_${data.video_id}`;
+          // video_name do backend trả về đã là tên chuẩn (vd. "L21_V001");
+          // fallback cho backend cũ.
+          videoId =
+            data.video_name ||
+            `${String(data.collection).split("_")[0]}_${data.video_id}`;
           setLoading(false);
         })
         .catch((e) => console.log(e));
